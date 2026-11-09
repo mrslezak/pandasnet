@@ -21,23 +21,29 @@ def test_basic_dataframe():
 
 
 def test_datetime64_into_dataframe():
+    utc_minus_6 = pd.to_datetime([
+        '2010-03-14T15:00:00.00-0600',
+        '2010-03-15T15:00:00.00-0600',
+        '2010-03-16T15:00:00.00-0600',
+    ], utc=True).tz_localize(None).to_numpy(dtype='datetime64[us]')
+    utc_plus_4 = pd.to_datetime([
+        '2010-03-14T15:00:00.00+0400',
+        '2010-03-15T15:00:00.00+0400',
+        '2010-03-16T15:00:00.00+0400',
+    ], utc=True).tz_localize(None).to_numpy(dtype='datetime64[us]')
+
     x = pd.DataFrame({
         'Utc': [
             np.datetime64('2010-03-14T15:00:00.00'),
             np.datetime64('2010-03-15T15:00:00.00'),
             np.datetime64('2010-03-16T15:00:00.00'),
         ],
-        'Utc-6': [
-            np.datetime64('2010-03-14T15:00:00.00-0600'),
-            np.datetime64('2010-03-15T15:00:00.00-0600'),
-            np.datetime64('2010-03-16T15:00:00.00-0600'),
-        ],
-        'Utc+4': [
-            np.datetime64('2010-03-14T15:00:00.00+0400'),
-            np.datetime64('2010-03-15T15:00:00.00+0400'),
-            np.datetime64('2010-03-16T15:00:00.00+0400'),
-        ]
+        'Utc-6': utc_minus_6,
+        'Utc+4': utc_plus_4,
     })
+
+    assert x['Utc-6'].iloc[0] == np.datetime64('2010-03-14T21:00:00')
+    assert x['Utc+4'].iloc[0] == np.datetime64('2010-03-14T11:00:00')
     y = pdnet.DateTimeDataFrame(x)
     
     __check(x, y)

@@ -12,10 +12,10 @@ It provides additional data conversions for `pandas`, `numpy` and `datetime`
 
 ## Prerequisites
 
-* python 3.6 or higher.
-* [dotnet](https://dotnet.microsoft.com/download). 
- 
-dotnet also provides [scripts](https://docs.microsoft.com/en-us/dotnet/core/tools/dotnet-install-script) to proceed the installation by command line.
+* Python 3.11 or higher on Windows.
+* NumPy 2.0 or higher and pandas 3.0 or higher.
+* The [.NET Framework 4.8 runtime](https://dotnet.microsoft.com/download/dotnet-framework) to run the converters.
+* Visual Studio Build Tools with the .NET Framework 4.7.2 targeting pack to build from source. The generated assemblies target .NET Framework 4.7.2 and run on .NET Framework 4.8; the .NET 8 SDK is not required.
 
 ## Installation
 
@@ -71,10 +71,22 @@ y = pdnet.BasicDataFrame(x)
 print(y)
 ```
 
+For one-dimensional NumPy arrays passed to CLR methods that expect typed arrays, adapt the CLR type or instance once with `pandasnet.wrap_class`. You can then call its methods normally with NumPy arrays or scalars. Python.NET's default array conversion does not reliably convert NumPy scalar elements; the proxy normalizes them and constructs the matching CLR array before invocation.
+
+```python
+import numpy as np
+import pandasnet
+from LibForTests import NumpyNet as npnet
+
+# Adapt once; the method expects System.Int32[] and the proxy maps dtype=int32.
+npnet = pandasnet.wrap_class(npnet)
+values = np.array([1, 2, 3], dtype=np.int32)
+result = npnet.OneDimensionInt32Array(values)
+```
 
 Below an exhausitve list of supported data convertions.
 
-### Python -> .Net
+### Python -> .Net (NumPy arrays via `pandasnet.wrap_class`)
 
 |Python                                  |.Net                     |
 |----------------------------------------|-------------------------|

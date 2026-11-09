@@ -50,7 +50,7 @@ namespace PandasNet
                 value = default;
                 return false;
             }
-            
+
             value = ((Func<PyObject, T>)decoder)(pyObj);
             return true;
         }

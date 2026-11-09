@@ -93,8 +93,14 @@ namespace PandasNet
 
         public static TimeSpan DecodeTimeDelta(this PyObject py)
         {
-            var seconds = py.InvokeMethod("total_seconds").As<double>();
-            return TimeSpan.FromSeconds(seconds);
+            var days = py.GetAttr("days").As<int>();
+            var seconds = py.GetAttr("seconds").As<int>();
+            var microseconds = py.GetAttr("microseconds").As<int>();
+            var ticks = checked(
+                (long)days * Time.TICKS_BY_DAY +
+                (long)seconds * Time.TICKS_BY_SEC +
+                (long)microseconds * Time.TICKS_BY_US);
+            return TimeSpan.FromTicks(ticks);
         }
 
     }

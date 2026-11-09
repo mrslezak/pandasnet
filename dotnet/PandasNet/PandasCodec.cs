@@ -12,6 +12,12 @@ namespace PandasNet
             codecs.Register<Dictionary<string, Array>>(Encode);
 
             // Python -> .Net
+            codecs.Register("<class 'pandas.DataFrame'>", DecodeDataFrame);
+            codecs.Register("<class 'pandas.Series'>", DecodeSeries);
+            codecs.Register("<class 'pandas.Timestamp'>", DecodeTimestamp);
+            codecs.Register("<class 'pandas.Timedelta'>", DateTimeCodec.DecodeTimeDelta);
+
+            // Legacy pandas type names
             codecs.Register("<class 'pandas.core.frame.DataFrame'>", DecodeDataFrame);
             codecs.Register("<class 'pandas.core.series.Series'>", DecodeSeries);
             codecs.Register("<class 'pandas._libs.tslibs.timestamps.Timestamp'>", DecodeTimestamp);

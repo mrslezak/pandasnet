@@ -1,7 +1,23 @@
-<Project Sdk="Microsoft.NET.Sdk">
-
+<Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
-    <TargetFramework>netstandard2.0</TargetFramework>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{1C6AF42C-FCF8-4D56-8F59-26525A945F42}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <RootNamespace>LibForTests</RootNamespace>
+    <AssemblyName>LibForTests</AssemblyName>
+    <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
+    <LangVersion>7.3</LangVersion>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
   </PropertyGroup>
-
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="DatetimeNet.cs" />
+    <Compile Include="NumpyNet.cs" />
+    <Compile Include="PandasNet.cs" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

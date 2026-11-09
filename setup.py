@@ -1,7 +1,10 @@
 from setuptools import setup, Command
-import distutils
-
-import sys, os
+import logging
+import os
+import shutil
+import sys
+import subprocess
+import sysconfig
 
 PY_MAJOR = sys.version_info[0]
 PY_MINOR = sys.version_info[1]
@@ -37,18 +40,27 @@ def _write_configure_props():
     ET.ElementTree(proj).write(CONFIGURED_PROPS)
 
 
-def _ensure_reference(project_file):
-    import xml.etree.ElementTree as ET
-    from distutils.sysconfig import get_python_lib
+def _find_msbuild():
+    msbuild = shutil.which('MSBuild.exe') or shutil.which('msbuild')
+    if msbuild:
+        return msbuild
 
-    root = ET.parse(project_file)
+    vswhere = os.path.join(
+        os.environ.get('ProgramFiles(x86)', r'C:\Program Files (x86)'),
+        'Microsoft Visual Studio', 'Installer', 'vswhere.exe')
+    if os.path.exists(vswhere):
+        result = subprocess.run(
+            [vswhere, '-latest', '-products', '*', '-requires',
+             'Microsoft.Component.MSBuild', '-find',
+             r'MSBuild\Current\Bin\MSBuild.exe'],
+            check=True, capture_output=True, text=True)
+        msbuild = result.stdout.strip().splitlines()
+        if msbuild:
+            return msbuild[0]
 
-    for node in root.findall('//Reference[@Include="Python.Runtime"]/HintPath'):
-        reference = os.path.join(os.path.dirname(project_file), node.text)
-        if not os.path.exists(reference):
-            node.text = os.path.join(get_python_lib(), 'pythonnet', 'runtime', 'Python.Runtime.dll')
-    
-    root.write(project_file)
+    raise RuntimeError(
+        'MSBuild.exe was not found. Install Visual Studio Build Tools with '
+        'the .NET Framework targeting pack, or add MSBuild.exe to PATH.')
 
 
 class configure(Command):
@@ -64,7 +76,7 @@ class configure(Command):
         pass
 
     def run(self):
-        self.announce("Writing configured.props...", level=distutils.log.INFO)
+        self.announce("Writing configured.props...", level=logging.INFO)
         _write_configure_props()
 
 
@@ -123,13 +135,22 @@ class build_dotnet(Command):
                 [],
             )
 
-            _ensure_reference(lib.path)
+            if sys.platform != 'win32':
+                raise RuntimeError(
+                    'Building pandasnet requires Windows and Visual Studio '
+                    'MSBuild for the .NET Framework target.')
 
-            opts.extend(["--configuration", self.dotnet_config])
-            opts.extend(["--output", output])
-
-            self.announce("Running dotnet build...", level=distutils.log.INFO)
-            self.spawn(["dotnet", "build", lib.path] + opts)
+            output = os.path.abspath(output)
+            self.announce("Running Visual Studio MSBuild...", level=logging.INFO)
+            self.spawn([
+                _find_msbuild(), lib.path,
+                '/t:Build',
+                '/p:Configuration=' + self.dotnet_config.capitalize(),
+                '/p:OutputPath=' + output + os.sep,
+                '/p:PythonNetRuntimePath=' + os.path.join(
+                    sysconfig.get_path('purelib'), 'pythonnet', 'runtime',
+                    'Python.Runtime.dll'),
+            ])
 
             if exclude is not None:
                 files = [os.path.join(output, f) for f in os.listdir(output) if exclude in f]
@@ -137,13 +158,25 @@ class build_dotnet(Command):
 
 
 # Add build_dotnet to the build tasks:
-from distutils.command.build import build as _build
+from setuptools.command.build import build as _build
 from setuptools.command.develop import develop as _develop
 from setuptools import Distribution
-import setuptools
+from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
 
 class build(_build):
     sub_commands = _build.sub_commands + [("build_dotnet", None)]
+
+
+class bdist_wheel(_bdist_wheel):
+    """Tag the managed .NET Framework assembly with its Windows platform."""
+
+    def finalize_options(self):
+        super().finalize_options()
+        self.root_is_pure = False
+
+    def get_tag(self):
+        _, _, platform = super().get_tag()
+        return "py3", "none", platform
 
 
 class develop(_develop):
@@ -161,6 +194,7 @@ Distribution.dotnet_libs = None
 cmdclass = {
     "build": build,
     "build_dotnet": build_dotnet,
+    "bdist_wheel": bdist_wheel,
     "configure": configure,
     "develop": develop,
 }
@@ -189,6 +223,7 @@ dotnet_libs = [
 setup(
     cmdclass=cmdclass,
     name='pandasnet',
+    version='2.0.0',
     author='Fabien Dieulle',
     author_email='fabiendieulle@hotmail.fr',
     description='Extensions of pythonnet package to support pandas DataFrame conversions',
@@ -198,25 +233,19 @@ setup(
     packages=['pandasnet'],
     package_data={'pandasnet': ['libs/PandasNet.*']},
     install_requires=[
-        'pycparser', 
-        'pythonnet', 
-        'pandas'],
+        'numpy>=2.0',
+        'pandas>=3.0',
+        'pythonnet>=3.2.0'],
+    python_requires='>=3.11',
     dotnet_libs=dotnet_libs,
     classifiers=[
        "License :: OSI Approved :: MIT License",
         "Programming Language :: C#",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.6",
-        "Programming Language :: Python :: 3.7",
-        "Programming Language :: Python :: 3.8",
-        "Programming Language :: Python :: 3.9",
-        "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
         "Operating System :: Microsoft :: Windows",
-        "Operating System :: POSIX :: Linux",
-        "Operating System :: MacOS :: MacOS X",
     ],
-    use_scm_version=True,
-    setup_requires=['setuptools_scm'],
     zip_safe=False
 )

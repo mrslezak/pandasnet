@@ -1,4 +1,11 @@
 import os
+
+import pandasnet
+import clr
+
+test_library = os.path.join(os.path.dirname(__file__), 'libs', 'LibForTests.dll')
+clr.AddReference(test_library)
+import os
 from pythonnet import load
 import sys
 

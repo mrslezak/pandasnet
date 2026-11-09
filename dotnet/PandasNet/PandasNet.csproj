@@ -1,18 +1,33 @@
-<Project Sdk="Microsoft.NET.Sdk">
-
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="15.0">
   <PropertyGroup>
-    <TargetFramework>netstandard2.0</TargetFramework>
+    <Configuration Condition=" '$(Configuration)' == '' ">Release</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProjectGuid>{E0D035FD-C315-4A56-B66E-72DF9A9F8C41}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <RootNamespace>PandasNet</RootNamespace>
+    <AssemblyName>PandasNet</AssemblyName>
+    <TargetFrameworkVersion>v4.7.2</TargetFrameworkVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>7.3</LangVersion>
+    <OutputPath>bin\$(Configuration)\</OutputPath>
   </PropertyGroup>
-
   <ItemGroup>
-    <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
-  </ItemGroup>
-
-  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Core" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="netstandard">
+      <HintPath>$(TargetFrameworkRootPath).NETFramework\$(TargetFrameworkVersion)\Facades\netstandard.dll</HintPath>
+    </Reference>
     <Reference Include="Python.Runtime">
-      <HintPath>..\..\venv\Lib\site-packages\pythonnet\runtime\Python.Runtime.dll</HintPath>
+      <HintPath>$(PythonNetRuntimePath)</HintPath>
     </Reference>
   </ItemGroup>
-
+  <ItemGroup>
+    <Compile Include="Codecs.cs" />
+    <Compile Include="DateTimeCodec.cs" />
+    <Compile Include="NumpyCodec.cs" />
+    <Compile Include="PandasCodec.cs" />
+    <Compile Include="Time.cs" />
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>
