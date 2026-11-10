@@ -41,7 +41,7 @@ def _temporal_values(values: np.ndarray, kind: str) -> list:
     if np.isnat(values).any():
         raise ValueError(f"NumPy {kind} arrays containing NaT cannot be converted")
 
-    nanoseconds = values.astype(f"{kind}[ns]").view(np.int64)
+    nanoseconds = values.astype(f"{kind}[ns]").view(np.int64).ravel(order="C")
     ticks = [_nanoseconds_to_ticks(value) for value in nanoseconds]
     if kind == "datetime64":
         return [DateTime(_UNIX_EPOCH_TICKS + value, DateTimeKind.Utc) for value in ticks]
@@ -49,31 +49,32 @@ def _temporal_values(values: np.ndarray, kind: str) -> list:
 
 
 def _array_to_clr(values: np.ndarray):
-    if values.ndim != 1:
-        raise ValueError("Only one-dimensional NumPy arrays can be wrapped for CLR array parameters")
+    if values.ndim not in (1, 2):
+        raise ValueError("Only one-dimensional or two-dimensional NumPy arrays can be wrapped for CLR array parameters")
 
     dtype = values.dtype
     kind = dtype.kind
+    flattened = values.ravel(order="C")
     if kind == "b":
         element_type = Boolean
-        converted = [bool(value) for value in values]
+        converted = [bool(value) for value in flattened]
     elif kind == "i":
         element_type = _SIGNED_INTEGER_TYPES.get(dtype.itemsize)
-        converted = [int(value) for value in values]
+        converted = [int(value) for value in flattened]
     elif kind == "u":
         element_type = _UNSIGNED_INTEGER_TYPES.get(dtype.itemsize)
-        converted = [int(value) for value in values]
+        converted = [int(value) for value in flattened]
     elif kind == "f" and dtype.itemsize == 4:
         element_type = Single
-        converted = [float(value) for value in values]
+        converted = [float(value) for value in flattened]
     elif kind == "f" and dtype.itemsize == 8:
         element_type = Double
-        converted = [float(value) for value in values]
+        converted = [float(value) for value in flattened]
     elif kind in {"U", "S", "O"}:
         element_type = String
-        if kind == "O" and not all(isinstance(value, (str, bytes, np.str_, np.bytes_)) for value in values):
+        if kind == "O" and not all(isinstance(value, (str, bytes, np.str_, np.bytes_)) for value in flattened):
             raise TypeError("Object arrays can only be wrapped when all values are strings")
-        converted = [value.decode("utf-8") if isinstance(value, (bytes, np.bytes_)) else str(value) for value in values]
+        converted = [value.decode("utf-8") if isinstance(value, (bytes, np.bytes_)) else str(value) for value in flattened]
     elif kind == "M":
         element_type = DateTime
         converted = _temporal_values(values, "datetime64")
@@ -85,7 +86,19 @@ def _array_to_clr(values: np.ndarray):
 
     if element_type is None:
         raise TypeError(f"NumPy dtype {dtype} has no supported CLR array mapping")
-    return Array[element_type](converted)
+
+    if values.ndim == 1:
+        return Array[element_type](converted)
+
+    rows, columns = (int(length) for length in values.shape)
+    result = Array.CreateInstance(element_type, rows, columns)
+    for row in range(rows):
+        for column in range(columns):
+            value = converted[row * columns + column]
+            if not isinstance(value, element_type):
+                value = element_type(value)
+            result.SetValue(value, row, column)
+    return result
 
 
 def _value_to_clr(value):
@@ -120,10 +133,12 @@ def _value_to_clr(value):
 def wrap(method: Callable) -> Callable:
     """Wrap a CLR method so NumPy arrays/scalars become typed CLR values first.
 
-    One-dimensional arrays are mapped by dtype to their corresponding CLR
-    primitive arrays. NumPy integer scalars are normalized with ``int`` before
-    constructing the matching CLR scalar or array. The CLR method's return
-    value is left to pandasnet's registered encoders.
+    Arrays are mapped by dtype to corresponding CLR element types. One-
+    dimensional inputs become CLR vectors, and two-dimensional inputs become
+    rectangular CLR arrays with row and column order preserved. NumPy integer
+    scalars are normalized with ``int`` before constructing the matching CLR
+    scalar or array. The CLR method's return value is left to pandasnet's
+    registered encoders.
     """
 
     def invoke(*args, **kwargs):

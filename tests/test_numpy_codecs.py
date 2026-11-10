@@ -1,8 +1,10 @@
 import pandasnet
 import numpy as np
 import pytest
+import clr
 
 from LibForTests import NumpyNet
+from System import Double, Int32
 
 npnet = pandasnet.wrap_class(NumpyNet)
 
@@ -50,6 +52,50 @@ def test_overloaded_methods():
     assert npnet.Overloaded(int_values) == 'Int32[]'
     assert npnet.Overloaded(double_values) == 'Double[]'
     assert npnet.Overloaded('text') == 'String'
+
+
+def test_one_dimensional_numpy_array_remains_clr_vector():
+    values = np.array([1.0, 2.0, 3.0], dtype=np.float64)
+    result = pandasnet.wrap(lambda value: value)(values)
+
+    assert result.Rank == 1
+    assert result.GetLength(0) == 3
+    assert result.GetType().GetElementType() == clr.GetClrType(Double)
+    assert [result.GetValue(i) for i in range(3)] == [1.0, 2.0, 3.0]
+
+
+@pytest.mark.parametrize(
+    "values, expected_shape",
+    [
+        (np.array([[1.0], [2.0], [3.0]], dtype=np.float64), (3, 1)),
+        (np.array([[1.0, 2.0, 3.0]], dtype=np.float64), (1, 3)),
+        (np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64), (2, 2)),
+        (
+            np.array([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], dtype=np.float64),
+            (2, 3),
+        ),
+    ],
+)
+def test_two_dimensional_float64_numpy_array_preserves_shape_and_values(values, expected_shape):
+    result = pandasnet.wrap(lambda value: value)(values)
+
+    assert result.Rank == 2
+    assert (result.GetLength(0), result.GetLength(1)) == expected_shape
+    assert result.GetType().GetElementType() == clr.GetClrType(Double)
+    for row in range(expected_shape[0]):
+        for column in range(expected_shape[1]):
+            assert result.GetValue(row, column) == values[row, column]
+
+
+def test_two_dimensional_int32_numpy_array_uses_existing_dtype_mapping():
+    values = np.array([[1, 2], [3, 4]], dtype=np.int32)
+    result = pandasnet.wrap(lambda value: value)(values)
+
+    assert result.Rank == 2
+    assert result.GetLength(0) == 2
+    assert result.GetLength(1) == 2
+    assert result.GetType().GetElementType() == clr.GetClrType(Int32)
+    assert [result.GetValue(row, column) for row in range(2) for column in range(2)] == [1, 2, 3, 4]
 
 
 def test_bool_codec():
@@ -130,7 +176,7 @@ def test_unsupported_numpy_dtype():
     with pytest.raises(TypeError, match='no supported CLR array mapping'):
         npnet.OneDimensionInt32Array(np.array([1 + 2j], dtype='complex64'))
     with pytest.raises(ValueError, match='one-dimensional'):
-        npnet.OneDimensionInt32Array(np.array([[1, 2]], dtype='int32'))
+        npnet.OneDimensionInt32Array(np.array([[[1, 2]]], dtype='int32'))
     with pytest.raises(ValueError, match='NaT'):
         npnet.OneDimensionDateTimeArray(np.array(['NaT'], dtype='datetime64[us]'))
 
