@@ -130,10 +130,26 @@ def test_incompatible_elements_still_raise():
         (np.datetime64("2026-01-05T12:00"), "DateTime"),
         (timedelta(hours=1), "TimeSpan"),
         (np.timedelta64(1, "h"), "TimeSpan"),
+        (pd.Timestamp("2026-01-05 12:00"), "DateTime"),
+        (pd.Timedelta(hours=1), "TimeSpan"),
     ],
 )
 def test_scalar_overload_prefers_native_clr_type(value, expected):
     assert net.Pick(value) == expected
+
+
+@pytest.mark.parametrize(
+    "values",
+    [pd.Series([1.0, 2.5, 3.5]), pd.Index([1.0, 2.5, 3.5]), {1.0, 2.5, 3.5}, range(1, 3), (v for v in (1.0, 2.5, 3.5))],
+    ids=["Series", "Index", "set", "range", "generator"],
+)
+def test_collection_like_values_convert_for_collection_parameters(values):
+    expected = 3.0 if isinstance(values, range) else 7.0
+    assert net.SumEnumerable(values) == expected
+
+
+def test_generator_is_read_once_across_overload_candidates():
+    assert net.PickCollection(v for v in (1.0, 2.0)) == "IEnumerable<Double>"
 
 
 @pytest.mark.parametrize(

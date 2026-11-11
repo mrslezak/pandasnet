@@ -1,10 +1,16 @@
 """End-to-end Python -> .NET -> Python calls through pandasnet.wrap without manual CLR adaptation."""
 
-from datetime import datetime
+from datetime import date, datetime, timezone
 
+import clr
 import numpy as np
+import pandas as pd
+import pytest
+from System import DateTime, DateTimeKind
+from System.Collections.Generic import IEnumerable
 
 import pandasnet
+from pandasnet import conversion
 from LibForTests import Item, Processor, ResultSet, Settings
 
 DATES = [
@@ -63,3 +69,66 @@ def test_returned_dates_round_trip_unchanged():
     settings = pandasnet.wrap(Settings)(datetime(2026, 1, 1), DATES, 1, 1, 1.0)
     dates = pandasnet.wrap_class(settings).get_Dates()
     np.testing.assert_array_equal(dates, np.array(DATES, dtype="datetime64[us]"))
+
+
+# --- Arguments are converted to the selected overload's CLR parameter types before invocation ---
+
+DATE_COLLECTIONS = {
+    "list": lambda: list(DATES),
+    "tuple": lambda: tuple(DATES),
+    "generator": lambda: (value for value in DATES),
+    "DatetimeIndex": lambda: pd.DatetimeIndex(DATES),
+    "Series": lambda: pd.Series(DATES),
+    "datetime64 ndarray": lambda: np.array(DATES, dtype="datetime64[us]"),
+    "Timestamp list": lambda: [pd.Timestamp(value) for value in DATES],
+}
+VALUATION_DATES = {
+    "datetime": datetime(2026, 1, 1),
+    "Timestamp": pd.Timestamp("2026-01-01"),
+    "date": date(2026, 1, 1),
+    "datetime64": np.datetime64("2026-01-01"),
+}
+
+
+def _converted_constructor_arguments(cls, *args):
+    match = conversion._resolve(cls.__name__, conversion._constructor_overloads(cls), args, {})
+    return match.overload.signature, [plan.convert() for plan in match.plans]
+
+
+@pytest.mark.parametrize("dates", DATE_COLLECTIONS.values(), ids=DATE_COLLECTIONS.keys())
+@pytest.mark.parametrize("valuation_date", VALUATION_DATES.values(), ids=VALUATION_DATES.keys())
+def test_arguments_converted_to_selected_clr_parameter_types(valuation_date, dates):
+    signature, converted = _converted_constructor_arguments(
+        Settings, valuation_date, conversion._materialize(dates()), 1000, 12345, 365.0
+    )
+    converted_valuation_date, converted_dates = converted[:2]
+
+    assert "IEnumerable`1[System.DateTime]" in signature
+    assert converted_valuation_date.GetType() == clr.GetClrType(DateTime)
+    assert clr.GetClrType(IEnumerable[DateTime]).IsInstanceOfType(converted_dates)
+    assert converted_dates.Count == len(DATES)
+    assert [p.GetType().FullName for p in converted[2:]] == ["System.Int32", "System.Int32", "System.Double"]
+
+
+@pytest.mark.parametrize("dates", DATE_COLLECTIONS.values(), ids=DATE_COLLECTIONS.keys())
+@pytest.mark.parametrize("valuation_date", VALUATION_DATES.values(), ids=VALUATION_DATES.keys())
+def test_constructor_succeeds_with_python_date_inputs(valuation_date, dates):
+    settings = pandasnet.wrap(Settings)(valuation_date, dates(), 1000, 12345, 365.0)
+    np.testing.assert_array_equal(
+        pandasnet.wrap_class(settings).get_Dates(), np.array(DATES, dtype="datetime64[us]")
+    )
+
+
+def test_aware_datetime_converts_to_utc_clr_datetime():
+    _, converted = _converted_constructor_arguments(
+        Settings, datetime(2026, 1, 1, 6, tzinfo=timezone.utc), DATES, 1, 1, 1.0
+    )
+    assert converted[0].Kind == DateTimeKind.Utc
+    assert converted[0].Hour == 6
+
+
+def test_timestamp_nanoseconds_reach_clr_ticks():
+    _, converted = _converted_constructor_arguments(
+        Settings, pd.Timestamp("2026-01-01 00:00:00.000000123"), DATES, 1, 1, 1.0
+    )
+    assert converted[0].Ticks % 10 == 1

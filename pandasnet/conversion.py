@@ -1,8 +1,8 @@
 """Helpers for adapting Python values to pythonnet CLR calls and CLR results back to Python."""
 
 import inspect
-from collections.abc import Callable, Mapping
-from datetime import date, datetime, time, timedelta
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from datetime import date, datetime, time, timedelta, timezone
 from typing import NamedTuple
 
 import clr
@@ -237,12 +237,34 @@ def _scalar_plan(value, native, target):
         approximate = isinstance(value, (bytes, np.bytes_, time)) or (
             isinstance(value, date) and not isinstance(value, datetime)
         )
-        return _Plan(int(approximate), True, lambda: _value_to_clr(value))
+        return _Plan(int(approximate), True, lambda: _scalar_to_clr(value))
     if target.FullName == "System.Char" and isinstance(value, str) and len(value) == 1:
         return _Plan(1, True, lambda: value)
     if target.IsAssignableFrom(native_type):
-        return _Plan(_GENERIC_COST, True, lambda: _value_to_clr(value))
+        return _Plan(_GENERIC_COST, True, lambda: _scalar_to_clr(value))
     return None
+
+
+_CLR_EPOCH = datetime(1, 1, 1)
+_ONE_MICROSECOND = timedelta(microseconds=1)
+
+
+def _scalar_to_clr(value):
+    """Python date/time values as CLR DateTime/TimeSpan (same Kind rules as the codecs); others via _value_to_clr."""
+    if isinstance(value, datetime):
+        kind = DateTimeKind.Local
+        if value.utcoffset() is not None:
+            value, kind = value.astimezone(timezone.utc), DateTimeKind.Utc
+        wall_clock = datetime.combine(value.date(), value.time())
+        ticks = (wall_clock - _CLR_EPOCH) // _ONE_MICROSECOND * 10 + getattr(value, "nanosecond", 0) // 100
+        return DateTime(ticks, kind)
+    if isinstance(value, date):
+        return DateTime(value.year, value.month, value.day)
+    if isinstance(value, timedelta):
+        return TimeSpan(value // _ONE_MICROSECOND * 10 + getattr(value, "nanoseconds", 0) // 100)
+    if isinstance(value, time):
+        return TimeSpan((datetime.combine(_CLR_EPOCH, value.replace(tzinfo=None)) - _CLR_EPOCH) // _ONE_MICROSECOND * 10)
+    return _value_to_clr(value)
 
 
 def _clr_instance_plan(value, target):
@@ -357,6 +379,20 @@ def _ndarray_plan(values: np.ndarray, target):
     return _Plan(cost, True, lambda: List[element](_array_to_clr(source())))
 
 
+def _as_sequence(value):
+    """list/tuple/ndarray form of a collection-like value, or None for scalars, mappings and 2-D frames."""
+    if isinstance(value, (list, tuple, np.ndarray)):
+        return value
+    if isinstance(value, (str, bytes, Mapping)):
+        return None
+    if hasattr(value, "ndim"):
+        # pandas Series/Index (incl. DatetimeIndex) keep their dtype; DataFrames and scalars are not sequences.
+        return value.to_numpy() if value.ndim == 1 and hasattr(value, "to_numpy") else None
+    if isinstance(value, Iterable) and not isinstance(value, Iterator):
+        return list(value)
+    return None
+
+
 def _plan(value, target):
     """Plan how to pass a Python value to a CLR parameter type; None if it certainly cannot be."""
     underlying = Nullable.GetUnderlyingType(target)
@@ -366,16 +402,17 @@ def _plan(value, target):
         return _plan(value, underlying)
     if isinstance(value, Object):
         return _clr_instance_plan(value, target)
-    if isinstance(value, (list, tuple, np.ndarray)):
+    sequence = _as_sequence(value)
+    if sequence is not None:
         collection = _collection_target(target)
-        if isinstance(value, np.ndarray):
-            plan = _ndarray_plan(value, target)
-            if plan is not None or value.dtype.kind != "O" or value.ndim != 1 or collection is None:
+        if isinstance(sequence, np.ndarray):
+            plan = _ndarray_plan(sequence, target)
+            if plan is not None or sequence.dtype.kind != "O" or sequence.ndim != 1 or collection is None:
                 return plan
-            value = list(value)
+            sequence = list(sequence)
         elif collection is None:
             return _uncertain_plan(value)
-        return _sequence_plan(value, collection)
+        return _sequence_plan(sequence, collection)
     if isinstance(value, Mapping):
         if _generic_interface(target, *_DICTIONARIES) is None:
             return _uncertain_plan(value)
@@ -631,6 +668,10 @@ def _value_from_clr(value):
 _UNDISCOVERED = object()
 
 
+def _materialize(value):
+    return list(value) if isinstance(value, Iterator) and not isinstance(value, Object) else value
+
+
 def wrap(method: Callable) -> Callable:
     """Wrap a CLR method or constructor so Python values are adapted to its CLR signature.
 
@@ -662,6 +703,9 @@ def wrap(method: Callable) -> Callable:
         nonlocal overloads
         match = None
         if discover is not None and (args or kwargs):
+            # One-shot iterators are read once so every candidate overload sees the same elements.
+            args = tuple(_materialize(value) for value in args)
+            kwargs = {key: _materialize(value) for key, value in kwargs.items()}
             if overloads is _UNDISCOVERED:
                 overloads = discover(method)
             if overloads:
