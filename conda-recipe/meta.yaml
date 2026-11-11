@@ -1,0 +1,36 @@
+# Built by build_packages.ps1, which packages the wheel it built from a release tag.
+{% set version = environ.get("PANDASNET_VERSION", "0.0.0") %}
+
+package:
+  name: pandasnet
+  version: {{ version }}
+
+source:
+  path: ../dist/wheels
+
+build:
+  number: {{ environ.get("PANDASNET_BUILD_NUMBER", 0) }}
+  skip: true  # [not win]
+
+requirements:
+  build:
+    - python
+    - pip
+  host:
+    - python
+    - pip
+  run:
+    - python
+    - numpy >=2.0
+    - pandas >=3.0
+    - pythonnet >=3.2.1
+
+test:
+  imports:
+    - pandasnet
+
+about:
+  home: https://github.com/mrslezak/pandasnet
+  license: MIT
+  license_file: ../LICENSE
+  summary: Python-to-.NET conversions for NumPy, pandas, and datetime values

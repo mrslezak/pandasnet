@@ -173,6 +173,20 @@ venv/Scripts/activate
 pip install -r requirements.txt
 ```
 
+### Build the pip wheel and conda packages
+
+Requires Windows, Visual Studio Build Tools (MSBuild) and `conda-build`. From an activated conda prompt:
+
+```
+.\build_packages.ps1                 # latest release tag, Python 3.11-3.15
+.\build_packages.ps1 -Python 3.12    # a single Python version
+.\build_packages.ps1 -Tag v2.1 -BuildNumber 1
+```
+
+The script builds from a clean checkout of the tag, so `setup.py`'s version must match the tag (`v2.1` -> `2.1.0`). The wheel is written to `dist\wheels` and the conda packages to `dist\conda\win-64`. To install a conda package, copy `install_pandasnet.cmd` next to it and run it from an activated environment.
+
+The conda-forge recipe in `conda-forge/` pins a released tarball, as conda-forge requires; its bot opens a pull request on the feedstock for each new tag.
+
 ## License
 
 This project is open source under the [MIT license](./LICENSE).

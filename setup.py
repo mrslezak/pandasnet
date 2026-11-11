@@ -223,7 +223,7 @@ dotnet_libs = [
 setup(
     cmdclass=cmdclass,
     name='pandasnet',
-    version='2.0.0',
+    version='2.1.0',
     author='Fabien Dieulle',
     author_email='fabiendieulle@hotmail.fr',
     description='Extensions of pythonnet package to support pandas DataFrame conversions',

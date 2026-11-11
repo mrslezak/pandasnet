@@ -1,0 +1,53 @@
+# conda-forge recipe: conda-forge requires a pinned release tarball; its bot opens a PR on each new tag.
+schema_version: 1
+
+context:
+  version: "2.0.0"
+
+package:
+  name: pandasnet
+  version: ${{ version }}
+
+source:
+  url: https://github.com/mrslezak/pandasnet/archive/refs/tags/v2.0.tar.gz
+  sha256: 8d5f0ce78fc9859d84cfbeb5c781d12fadc92435b7f85e578d3a1a6daf382bc8
+
+build:
+  number: 0
+  skip:
+    - not win
+    - match(python, "<3.11")
+  script: ${{ PYTHON }} -m pip install . -vv --no-build-isolation
+
+requirements:
+  build:
+    - msbuild
+  host:
+    - python
+    - pip
+    - setuptools >=68
+    - wheel
+    - pythonnet >=3.2.0
+  run:
+    - python >=3.11
+    - numpy >=2.0
+    - pandas >=3.0
+    - pythonnet >=3.2.0
+
+tests:
+  - python:
+      imports:
+        - pandasnet
+        - pandasnet.conversion
+      pip_check: true
+  - script: run_test.py
+
+about:
+  homepage: https://github.com/mrslezak/pandasnet
+  repository: https://github.com/mrslezak/pandasnet
+  license: MIT
+  license_file: LICENSE
+  summary: Python-to-.NET conversions for NumPy, pandas, and datetime values
+extra:
+  recipe-maintainers:
+    - mrslezak
