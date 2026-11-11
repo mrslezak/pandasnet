@@ -24,10 +24,10 @@ namespace PandasNet
             {
                 scope.Import("datetime");
                 var tz = string.Empty;
-                if (x.Kind == DateTimeKind.Utc)
+                if (Time.EncodesAsUtc(x))
                 {
-                    scope.Import("pytz");
-                    tz = ", tzinfo=pytz.utc";
+                    x = x.ToUniversalTime();
+                    tz = ", tzinfo=datetime.timezone.utc";
                 }
                 var microseconds = x.Ticks / 10L % 1000000L;
                 scope.Exec($"a = datetime.datetime({x:yyyy, M, d, H, m, s}, {microseconds}{tz})");
@@ -53,7 +53,7 @@ namespace PandasNet
                 py.GetAttr("day").As<int>())
                 .Date;
 
-        private static DateTime DecodeDateTime(PyObject py)
+        public static DateTime DecodeDateTime(PyObject py)
         {
             var utcDelta = TimeSpan.Zero;
             var kind = DateTimeKind.Local;
@@ -75,8 +75,8 @@ namespace PandasNet
                 py.GetAttr("second").As<int>(),
                 kind);
 
-            return result.AddTicks(-utcDelta.Ticks + py.GetAttr("microsecond").As<int>() * 10)
-                .ToLocalTime();
+            // Aware values become the equivalent UTC instant; naive values keep their wall-clock time.
+            return result.AddTicks(-utcDelta.Ticks + py.GetAttr("microsecond").As<int>() * 10);
         }
 
         private static TimeSpan DecodeTime(PyObject py)

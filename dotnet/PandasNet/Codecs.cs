@@ -11,7 +11,7 @@ namespace PandasNet
         public static void Initialize(bool force = false) => Instance.Setup(force);
 
         private bool _isInitialized = false;
-        private readonly Dictionary<string, object> _decoders = new Dictionary<string, object>();
+        private readonly Dictionary<string, (Type Type, Func<PyObject, object> Decode)> _decoders = new Dictionary<string, (Type, Func<PyObject, object>)>();
         private readonly Dictionary<Type, Func<object, PyObject>> _encoders = new Dictionary<Type, Func<object, PyObject>>();
 
         private Codecs() 
@@ -34,25 +34,26 @@ namespace PandasNet
 
         public void Register<T>(Func<T, PyObject> encoder) => _encoders[typeof(T)] = p => encoder((T)p);
 
-        public void Register<T>(string pyType, Func<PyObject, T> decoder) => _decoders[pyType] = decoder;
+        public void Register<T>(string pyType, Func<PyObject, T> decoder) => _decoders[pyType] = (typeof(T), p => decoder(p));
 
         public bool CanDecode(PyType objectType, Type targetType)
         {
-            var type = objectType.ToString();
-            return _decoders.ContainsKey(type);
+            // Decoders typed as object (e.g. numpy arrays) are checked against the target in TryDecode.
+            return _decoders.TryGetValue(objectType.ToString(), out var decoder)
+                && (decoder.Type == typeof(object) || targetType.IsAssignableFrom(decoder.Type));
         }
 
         public bool TryDecode<T>(PyObject pyObj, out T value)
         {
-            var type = pyObj.GetPythonType().ToString();
-            if (!_decoders.TryGetValue(type, out var decoder))
+            if (_decoders.TryGetValue(pyObj.GetPythonType().ToString(), out var decoder)
+                && decoder.Decode(pyObj) is T result)
             {
-                value = default;
-                return false;
+                value = result;
+                return true;
             }
 
-            value = ((Func<PyObject, T>)decoder)(pyObj);
-            return true;
+            value = default;
+            return false;
         }
 
         public bool CanEncode(Type type)

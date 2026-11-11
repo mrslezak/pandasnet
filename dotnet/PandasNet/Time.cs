@@ -2,8 +2,23 @@
     
 namespace PandasNet
 {
+    /// <summary>How DateTimeKind.Local values are returned to Python.</summary>
+    public enum LocalDateTimePolicy
+    {
+        /// <summary>Keep the local wall-clock value (naive datetime / datetime64).</summary>
+        WallClock,
+        /// <summary>Convert to UTC (aware UTC datetime / datetime64 in UTC).</summary>
+        Utc,
+    }
+
     public static class Time
     {
+        public static LocalDateTimePolicy LocalPolicy { get; set; } = LocalDateTimePolicy.WallClock;
+
+        // Utc values are always returned in UTC; Unspecified values always keep their wall-clock value.
+        public static bool EncodesAsUtc(DateTime x)
+            => x.Kind == DateTimeKind.Utc || (x.Kind == DateTimeKind.Local && LocalPolicy == LocalDateTimePolicy.Utc);
+
         public static readonly DateTime Origin = new DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc);
         public static readonly long OriginTicks = Origin.Ticks;
 

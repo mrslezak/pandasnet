@@ -81,25 +81,13 @@ namespace PandasNet
         private static unsafe void Encode(DateTime[] array, IntPtr ptr)
         {
             var dst = (long*)ptr;
-
-            fixed (DateTime* ptSrc = array)
+            for (var i = 0; i < array.Length; i++)
             {
-                var src = ptSrc;
-                var end = src + array.Length;
-                var deltaTicksToUtc = src->ToUniversalTime().Ticks - src->Ticks;
-                var nextDayTicks = src->Date.AddDays(1).Ticks;
-                while (src < end)
-                {
-                    // This is enough to detect the day change to handle DST changes without hit performances
-                    if (src->Ticks >= nextDayTicks)
-                    {
-                        deltaTicksToUtc = src->ToUniversalTime().Ticks - src->Ticks;
-                        nextDayTicks = src->Date.AddDays(1).Ticks;
-                    }
-                    
-                    *dst = (src->Ticks + deltaTicksToUtc - Time.OriginTicks) / 10;
-                    ++src; ++dst;
-                }
+                var value = array[i];
+                var ticks = value.Kind == DateTimeKind.Local && Time.EncodesAsUtc(value)
+                    ? value.ToUniversalTime().Ticks
+                    : value.Ticks;
+                dst[i] = (ticks - Time.OriginTicks) / 10;
             }
         }
 

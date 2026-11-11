@@ -84,6 +84,21 @@ values = np.array([1, 2, 3], dtype=np.int32)
 result = npnet.OneDimensionInt32Array(values)
 ```
 
+`pandasnet.wrap` (and every method of a `wrap_class` proxy) is target-type aware. It reads the CLR overloads of the wrapped method or constructor, picks the overload whose parameter types best fit the Python arguments, and converts each argument to that parameter's type:
+
+* lists/tuples become `T[]`, or a `List<T>` for `List<T>`, `IList<T>`, `ICollection<T>`, `IReadOnlyList<T>` and `IEnumerable<T>` parameters, with elements converted recursively;
+* dicts become `Dictionary<K, V>` for `Dictionary`/`IDictionary`/`IReadOnlyDictionary` parameters;
+* NumPy 1-D/2-D arrays become `T[]`/`T[,]`, safely cast when the element type differs (for example `int32` -> `double[]`);
+* Python/NumPy scalars, `datetime`, `date`, `timedelta`, `datetime64` and `timedelta64` become the matching CLR primitive, `DateTime` or `TimeSpan`.
+
+Exact matches win over widening or generic conversions; if several overloads match equally well a `TypeError` lists them. Wrapped *method* results are converted back recursively: numeric, boolean, string and date/time arrays and framework collections (`IEnumerable<T>`, `IReadOnlyList<T>`, `List<T>`, ...) become NumPy arrays, rectangular arrays keep their shape, dictionaries become `dict`, tuples become `tuple`, and other collections become `list`. Domain objects stay CLR objects, and wrapped constructors return the constructed CLR object.
+
+```python
+settings = pandasnet.wrap(Settings)(datetime(2026, 1, 1), [datetime(2026, 1, 5)], 1000, 12345, 365.0)
+result = pandasnet.wrap(Processor().Run)(items, np.eye(2), settings)   # items: list of CLR objects
+values = pandasnet.wrap(result.GetValues)("first", datetime(2026, 1, 5))  # IReadOnlyList<double> -> np.ndarray
+```
+
 Below an exhausitve list of supported data convertions.
 
 ### Python -> .Net (NumPy arrays via `pandasnet.wrap_class`)

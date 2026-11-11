@@ -21,3 +21,13 @@ from PandasNet import Codecs
 Codecs.Initialize(False)
 
 from .conversion import wrap, wrap_class
+
+
+def set_local_datetime_policy(policy: str) -> None:
+	"""Choose how DateTimeKind.Local values are returned: 'wall_clock' (default) or 'utc'."""
+	from PandasNet import LocalDateTimePolicy, Time
+
+	policies = {'wall_clock': LocalDateTimePolicy.WallClock, 'utc': LocalDateTimePolicy.Utc}
+	if policy not in policies:
+		raise ValueError(f"policy must be one of {sorted(policies)}, not {policy!r}")
+	Time.LocalPolicy = policies[policy]

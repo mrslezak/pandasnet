@@ -60,24 +60,7 @@ namespace PandasNet
         private static Array DecodeSeries(this PyObject py) 
             => (Array)NumpyCodec.Decode(py.InvokeMethod("to_numpy"));
 
-        private static object DecodeTimestamp(this PyObject py)
-        {
-            var posix = py.InvokeMethod("timestamp").As<double>();
-            var timestamp = Time.Origin.AddSeconds(posix);
-
-            var tz = py.GetAttr("tzinfo");
-            if (tz.HasAttr("utcoffset"))
-            {
-                var utcOffset = py.InvokeMethod("utcoffset")
-                    .DecodeTimeDelta();
-                timestamp = timestamp.Add(utcOffset);
-            }
-            else
-            {
-                timestamp = new DateTime(timestamp.Ticks, DateTimeKind.Utc);
-            }
-
-            return timestamp;
-        }
+        private static DateTime DecodeTimestamp(this PyObject py)
+            => DateTimeCodec.DecodeDateTime(py).AddTicks(py.GetAttr("nanosecond").As<int>() / 100);
     }
 }
