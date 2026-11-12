@@ -2,15 +2,15 @@
 schema_version: 1
 
 context:
-  version: "2.0.0"
+  version: "2.1.5"
 
 package:
   name: pandasnet
   version: ${{ version }}
 
 source:
-  url: https://github.com/mrslezak/pandasnet/archive/refs/tags/v2.0.tar.gz
-  sha256: 8d5f0ce78fc9859d84cfbeb5c781d12fadc92435b7f85e578d3a1a6daf382bc8
+  url: https://github.com/mrslezak/pandasnet/archive/refs/tags/v${{ version }}.tar.gz
+  sha256: aca4ccc517e89de005f808024d8595858d30d7bcab15e40134ce5427ceac7666
 
 build:
   number: 0
