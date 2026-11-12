@@ -15,12 +15,24 @@ elif runtime.kind != '.NET Framework':
 	)
 
 import clr
+if not hasattr(clr, 'AddReference'):
+	# IDE module reloaders (e.g. Spyder's UMR) drop pythonnet's clr module; clr.py cannot recreate it.
+	clr = getattr(pythonnet, '_pandasnet_clr', None)
+	if clr is None:
+		raise RuntimeError(
+			"pythonnet's clr module was removed from sys.modules after the .NET runtime started. "
+			"Restart the Python process, or exclude clr/System/pandasnet from your IDE's module reloader."
+		)
+	sys.modules['clr'] = clr
+# pythonnet is a library module, so reloaders keep it and the stashed clr survives.
+pythonnet._pandasnet_clr = clr
 clr.AddReference('PandasNet')
 
 from PandasNet import Codecs
 Codecs.Initialize(False)
 
 from .conversion import wrap, wrap_class
+from .auto import add_reference, load, unwrap
 
 
 def set_local_datetime_policy(policy: str) -> None:

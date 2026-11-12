@@ -196,6 +196,8 @@ def _array_to_clr(values: np.ndarray):
 
 
 def _value_to_clr(value):
+    if isinstance(value, _ClrProxy):
+        return value._target
     if isinstance(value, np.ndarray):
         return _array_to_clr(value)
     # Checked before np.integer because np.timedelta64 subclasses np.signedinteger.
@@ -470,6 +472,8 @@ def _as_sequence(value):
 
 def _plan(value, target):
     """Plan how to pass a Python value to a CLR parameter type; None if it certainly cannot be."""
+    if isinstance(value, _ClrProxy):
+        value = value._target
     underlying = Nullable.GetUnderlyingType(target)
     if value is None:
         return _Plan(0, True, lambda: None) if not target.IsValueType or underlying is not None else None
@@ -780,6 +784,8 @@ def wrap(method: Callable) -> Callable:
     plain Python callables return their result unchanged.
     """
 
+    if isinstance(method, _ClrProxy):
+        method = method._target
     if isinstance(method, type) and issubclass(method, Object):
         discover, convert_result = _constructor_overloads, False
     elif hasattr(method, "__overloads__"):
