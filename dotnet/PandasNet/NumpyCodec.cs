@@ -23,7 +23,7 @@ namespace PandasNet
             codecs.Register<double[]>(a => EncodeFast(a, Encode));
             codecs.Register<DateTime[]>(a => EncodeFast(a, Encode));
             codecs.Register<TimeSpan[]>(a => EncodeFast(a, Encode));
-            codecs.Register<string[]>(a => EncodeSafe(a));
+            codecs.Register<string[]>(EncodeStrings);
 
             // Python -> .Net
             codecs.Register("<class 'numpy.ndarray'>", Decode);
@@ -41,6 +41,24 @@ namespace PandasNet
         }
 
         #region Encode 
+
+        private const char StringSeparator = '\x1f';
+
+        // One joined string crosses the boundary instead of one Python object per element.
+        private static PyObject EncodeStrings(string[] array)
+        {
+            if (array.Length == 0 || array.Any(p => p == null || p.IndexOf(StringSeparator) >= 0))
+                return EncodeSafe(array);
+
+            using (var scope = Py.CreateScope())
+            using (var joined = new PyString(string.Join(StringSeparator.ToString(), array)))
+            {
+                scope.Import("numpy");
+                scope.Set("joined", joined);
+                scope.Exec("a = numpy.array(joined.split('\\x1f'))");
+                return scope.Get("a");
+            }
+        }
 
         private static PyObject EncodeSafe<T>(this T[] array, Func<T, PyObject> select = null)
         {

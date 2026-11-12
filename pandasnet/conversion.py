@@ -1,5 +1,6 @@
 """Helpers for adapting Python values to pythonnet CLR calls and CLR results back to Python."""
 
+import ctypes
 import inspect
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from datetime import date, datetime, time, timedelta, timezone
@@ -7,23 +8,29 @@ from typing import NamedTuple
 
 import clr
 import numpy as np
-from PandasNet import Codecs
+from PandasNet import ArrayShape, Codecs
 from System import (
     AppDomain,
     Array,
     Boolean,
+    Buffer,
     Byte,
+    Char,
+    Converter,
     DateTime,
     DateTimeKind,
+    Delegate,
     Double,
     Int16,
     Int32,
     Int64,
+    IntPtr,
     Nullable,
     Object,
     SByte,
     Single,
     String,
+    StringSplitOptions,
     TimeSpan,
     Tuple,
     Type,
@@ -33,31 +40,101 @@ from System import (
 )
 from System.Collections.Generic import Dictionary, List
 from System.Linq import Enumerable
+from System.Runtime.InteropServices import GCHandle, GCHandleType, Marshal
 
 
 _SIGNED_INTEGER_TYPES = {1: SByte, 2: Int16, 4: Int32, 8: Int64}
 _UNSIGNED_INTEGER_TYPES = {1: Byte, 2: UInt16, 4: UInt32, 8: UInt64}
-_SUPPORTED_TIME_UNITS = {"W", "D", "h", "m", "s", "ms", "us", "ns"}
+_TICKS_PER_UNIT = {
+    "W": 6_048_000_000_000,
+    "D": 864_000_000_000,
+    "h": 36_000_000_000,
+    "m": 600_000_000,
+    "s": 10_000_000,
+    "ms": 10_000,
+    "us": 10,
+}
 _UNIX_EPOCH_TICKS = DateTime(1970, 1, 1, 0, 0, 0, DateTimeKind.Utc).Ticks
+_MAX_DATETIME_TICKS = DateTime(9999, 12, 31).Ticks + TimeSpan.TicksPerDay - 1
+_UTC_BINARY_FLAG = DateTime(0, DateTimeKind.Utc).ToBinary()
+_FROM_BINARY = Delegate.CreateDelegate(
+    clr.GetClrType(Converter[Int64, DateTime]), clr.GetClrType(DateTime).GetMethod("FromBinary")
+)
+# Invoked through reflection: a direct ConvertAll call would re-encode the DateTime[] result to NumPy.
+_CONVERT_ALL_TO_DATETIME = clr.GetClrType(Array).GetMethod("ConvertAll").MakeGenericMethod(
+    clr.GetClrType(Int64), clr.GetClrType(DateTime)
+)
+_STRING_SEPARATOR = "\x1f"
+# Invoked through reflection so the string[] result is not re-encoded to NumPy.
+_SPLIT_STRING = next(
+    method
+    for method in clr.GetClrType(String).GetMethods()
+    if method.Name == "Split"
+    and [parameter.ParameterType.FullName for parameter in method.GetParameters()]
+    == ["System.Char[]", "System.StringSplitOptions"]
+)
+_SPLIT_ARGUMENTS = Array[Object]([Array[Char]([_STRING_SEPARATOR]), getattr(StringSplitOptions, "None")])
 
 
-def _nanoseconds_to_ticks(value: np.integer) -> int:
-    nanoseconds = int(value)
-    return nanoseconds // 100 if nanoseconds >= 0 else -((-nanoseconds) // 100)
-
-
-def _temporal_values(values: np.ndarray, kind: str) -> list:
-    unit, _ = np.datetime_data(values.dtype)
-    if unit not in _SUPPORTED_TIME_UNITS:
+def _temporal_ticks(values: np.ndarray, kind: str) -> np.ndarray:
+    """CLR ticks (truncated toward zero) for datetime64/timedelta64 values; datetimes count from 0001-01-01."""
+    unit, count = np.datetime_data(values.dtype)
+    if unit != "ns" and unit not in _TICKS_PER_UNIT:
         raise TypeError(f"NumPy {kind} unit {unit!r} is not supported")
     if np.isnat(values).any():
         raise ValueError(f"NumPy {kind} arrays containing NaT cannot be converted")
 
-    nanoseconds = values.astype(f"{kind}[ns]").view(np.int64).ravel(order="C")
-    ticks = [_nanoseconds_to_ticks(value) for value in nanoseconds]
-    if kind == "datetime64":
-        return [DateTime(_UNIX_EPOCH_TICKS + value, DateTimeKind.Utc) for value in ticks]
-    return [TimeSpan.FromTicks(value) for value in ticks]
+    raw = np.ascontiguousarray(values, dtype=values.dtype.newbyteorder("=")).view(np.int64)
+    if unit == "ns":
+        scaled = raw * count
+        ticks = np.where(scaled < 0, -(-scaled // 100), scaled // 100)
+    else:
+        factor = _TICKS_PER_UNIT[unit] * count
+        if (np.abs(raw) > np.iinfo(np.int64).max // factor).any():
+            raise ValueError(f"NumPy {kind} values are outside the range of CLR ticks")
+        ticks = raw * factor
+    if kind == "timedelta64":
+        return ticks
+    if ((ticks < -_UNIX_EPOCH_TICKS) | (ticks > _MAX_DATETIME_TICKS - _UNIX_EPOCH_TICKS)).any():
+        raise ValueError("NumPy datetime64 values are outside the range of System.DateTime")
+    return ticks + _UNIX_EPOCH_TICKS
+
+
+def _datetime_vector(ticks: np.ndarray):
+    binary = ticks.ravel(order="C") | _UTC_BINARY_FLAG
+    longs = Array.CreateInstance(Int64, binary.size)
+    if binary.size:
+        Marshal.Copy(IntPtr(binary.ctypes.data), longs, 0, binary.size)
+    return _CONVERT_ALL_TO_DATETIME.Invoke(None, Array[Object]([longs, _FROM_BINARY]))
+
+
+def _string_values(values: np.ndarray, kind: str) -> list:
+    flattened = values.ravel(order="C").tolist()
+    if kind == "U":
+        return flattened
+    if kind == "O" and not all(isinstance(value, (str, bytes)) for value in flattened):
+        raise TypeError("Object arrays can only be wrapped when all values are strings")
+    return [value.decode("utf-8") if isinstance(value, bytes) else str(value) for value in flattened]
+
+
+def _string_vector(strings: list):
+    joined = _STRING_SEPARATOR.join(strings)
+    if not strings or joined.count(_STRING_SEPARATOR) != len(strings) - 1:
+        return Array[String](strings)
+    return _SPLIT_STRING.Invoke(joined, _SPLIT_ARGUMENTS)
+
+
+def _timespan_array_to_clr(ticks: np.ndarray):
+    # TimeSpan arrays can be pinned on .NET Framework (DateTime arrays cannot).
+    ticks = np.ascontiguousarray(ticks)
+    result = _clr_shaped_array(TimeSpan, ticks.shape)
+    if ticks.size:
+        handle = GCHandle.Alloc(result, GCHandleType.Pinned)
+        try:
+            ctypes.memmove(handle.AddrOfPinnedObject().ToInt64(), ticks.ctypes.data, ticks.nbytes)
+        finally:
+            handle.Free()
+    return result
 
 
 def _array_element_type(dtype: np.dtype):
@@ -80,44 +157,42 @@ def _array_element_type(dtype: np.dtype):
     return None
 
 
+def _clr_shaped_array(element_type, shape: tuple):
+    return Array.CreateInstance(element_type, Array[Int32]([int(length) for length in shape]))
+
+
+def _primitive_array_to_clr(values: np.ndarray, element_type):
+    # NumPy C order and CLR arrays of any rank are both row-major, so the bytes copy unchanged.
+    values = np.ascontiguousarray(values, dtype=values.dtype.newbyteorder("="))
+    result = _clr_shaped_array(element_type, values.shape)
+    if values.nbytes:
+        buffer = Array.CreateInstance(Byte, values.nbytes)
+        Marshal.Copy(IntPtr(values.ctypes.data), buffer, 0, values.nbytes)
+        Buffer.BlockCopy(buffer, 0, result, 0, values.nbytes)
+    return result
+
+
 def _array_to_clr(values: np.ndarray):
-    if values.ndim not in (1, 2):
-        raise ValueError("Only one-dimensional or two-dimensional NumPy arrays can be wrapped for CLR array parameters")
+    if values.ndim == 0:
+        raise ValueError("Zero-dimensional NumPy arrays cannot be wrapped for CLR array parameters")
 
     dtype = values.dtype
     kind = dtype.kind
     element_type = _array_element_type(dtype)
     if element_type is None:
         raise TypeError(f"NumPy dtype {dtype} has no supported CLR array mapping")
+    if kind in {"b", "i", "u", "f"}:
+        return _primitive_array_to_clr(values, element_type)
+    if kind == "m":
+        return _timespan_array_to_clr(_temporal_ticks(values, "timedelta64"))
 
-    flattened = values.ravel(order="C")
-    if kind == "b":
-        converted = [bool(value) for value in flattened]
-    elif kind in {"i", "u"}:
-        converted = [int(value) for value in flattened]
-    elif kind == "f":
-        converted = [float(value) for value in flattened]
-    elif kind in {"U", "S", "O"}:
-        if kind == "O" and not all(isinstance(value, (str, bytes, np.str_, np.bytes_)) for value in flattened):
-            raise TypeError("Object arrays can only be wrapped when all values are strings")
-        converted = [value.decode("utf-8") if isinstance(value, (bytes, np.bytes_)) else str(value) for value in flattened]
-    elif kind == "M":
-        converted = _temporal_values(values, "datetime64")
+    if kind == "M":
+        vector = _datetime_vector(_temporal_ticks(values, "datetime64"))
     else:
-        converted = _temporal_values(values, "timedelta64")
-
+        vector = _string_vector(_string_values(values, kind))
     if values.ndim == 1:
-        return Array[element_type](converted)
-
-    rows, columns = (int(length) for length in values.shape)
-    result = Array.CreateInstance(element_type, rows, columns)
-    for row in range(rows):
-        for column in range(columns):
-            value = converted[row * columns + column]
-            if not isinstance(value, element_type):
-                value = element_type(value)
-            result.SetValue(value, row, column)
-    return result
+        return vector
+    return ArrayShape.Reshape[element_type](vector, Array[Int32]([int(length) for length in values.shape]))
 
 
 def _value_to_clr(value):
@@ -350,7 +425,7 @@ def _mapping_plan(values: Mapping, target):
 
 def _ndarray_plan(values: np.ndarray, target):
     native = _array_element_type(values.dtype)
-    if native is None or values.ndim not in (1, 2):
+    if native is None or values.ndim == 0:
         return None
     native = clr.GetClrType(native)
     if target.IsArray and target.GetArrayRank() == values.ndim:
@@ -358,7 +433,7 @@ def _ndarray_plan(values: np.ndarray, target):
     elif values.ndim == 1 and (collection := _collection_target(target)) is not None:
         element, cost, is_array = collection
     else:
-        native_array = native.MakeArrayType() if values.ndim == 1 else native.MakeArrayType(2)
+        native_array = native.MakeArrayType() if values.ndim == 1 else native.MakeArrayType(values.ndim)
         if target.IsAssignableFrom(native_array):
             return _Plan(_GENERIC_COST, True, lambda: _array_to_clr(values))
         return None
@@ -650,10 +725,25 @@ def _value_from_clr(value):
         return value
     if clr_type.IsArray and clr_type.GetArrayRank() > 1:
         element = clr_type.GetElementType()
-        if not Codecs.Instance.CanEncode(element.MakeArrayType()):
+        vector_type = element.MakeArrayType()
+        if not Codecs.Instance.CanEncode(vector_type):
             return value
         shape = tuple(value.GetLength(dimension) for dimension in range(clr_type.GetArrayRank()))
-        return Enumerable.ToArray[element](Enumerable.Cast[element](value)).reshape(shape)
+        if element.IsPrimitive:
+            flat = Array.CreateInstance(element, value.Length)
+            Buffer.BlockCopy(value, 0, flat, 0, Buffer.ByteLength(value))
+            return _encode(flat, vector_type).reshape(shape)
+        if element.Equals(clr.GetClrType(TimeSpan)):
+            ticks = np.empty(shape, dtype=np.int64)
+            if ticks.size:
+                handle = GCHandle.Alloc(value, GCHandleType.Pinned)
+                try:
+                    ctypes.memmove(ticks.ctypes.data, handle.AddrOfPinnedObject().ToInt64(), ticks.nbytes)
+                finally:
+                    handle.Free()
+            # Same truncation toward zero as the C# TimeSpan[] encoder.
+            return np.where(ticks < 0, -(-ticks // 10), ticks // 10).astype("timedelta64[us]")
+        return ArrayShape.Flatten[element](value).reshape(shape)
     if _generic_interface(clr_type, *_DICTIONARIES) is not None:
         return {_value_from_clr(pair.Key): _value_from_clr(pair.Value) for pair in value}
     enumerable = _generic_interface(clr_type, _ENUMERABLE)
@@ -676,7 +766,7 @@ def wrap(method: Callable) -> Callable:
     """Wrap a CLR method or constructor so Python values are adapted to its CLR signature.
 
     Each argument is converted for the parameter type of the best-matching
-    overload: NumPy arrays become ``T[]``/``T[,]``, lists/tuples become ``T[]``
+    overload: NumPy arrays become ``T[]``/``T[,]``/``T[,,]`` (any rank), lists/tuples become ``T[]``
     or ``List<T>`` for ``IEnumerable<T>``-style parameters, dicts become
     ``Dictionary<K, V>``, and scalars become the matching CLR primitive,
     recursively for elements. Overloads are ranked by conversion cost; equally

@@ -23,6 +23,7 @@
     </Reference>
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="ArrayShape.cs" />
     <Compile Include="Codecs.cs" />
     <Compile Include="DateTimeCodec.cs" />
     <Compile Include="NumpyCodec.cs" />
