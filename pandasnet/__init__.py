@@ -33,6 +33,8 @@ Codecs.Initialize(False)
 
 from .conversion import wrap, wrap_class
 from .auto import add_reference, load, unwrap
+from .frames import to_frame
+from .interactive import ask
 from .stubs import generate_stubs
 
 

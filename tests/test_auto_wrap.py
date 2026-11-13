@@ -4,6 +4,7 @@ import importlib
 import inspect
 import os
 import sys
+import types
 from datetime import datetime
 
 import numpy as np
@@ -138,9 +139,31 @@ def test_explicit_namespace(ns):
     assert sub.Portfolio([]).TotalWeight() == 0.0
 
 
-def test_load_requires_namespace_without_common_root():
-    with pytest.raises(ValueError, match="namespace="):
-        pandasnet.load("System")
+class _FakeAssembly:
+    def __init__(self, name, namespaces):
+        self._name, self._types = name, [types.SimpleNamespace(Namespace=n) for n in namespaces]
+
+    def GetExportedTypes(self):
+        return self._types
+
+    def GetName(self):
+        return types.SimpleNamespace(Name=self._name)
+
+
+@pytest.mark.parametrize(
+    "name, namespaces, expected",
+    [
+        ("my-lib", ["Vendor.Interop.Excel", "my_lib", "my_lib.Models", "my_lib.Models"], "my_lib"),
+        ("MyLib", ["MyLib.A", "MyLib.B.C"], "MyLib"),
+    ],
+)
+def test_root_namespace_prefers_the_one_named_after_the_assembly(name, namespaces, expected):
+    assert auto._root_namespace(_FakeAssembly(name, namespaces)) == expected
+
+
+def test_root_namespace_lists_the_choices_when_ambiguous():
+    with pytest.raises(ValueError, match=r"pass namespace= one of: 'Alpha' \(2 namespaces\), 'Beta' \(1 namespaces\)"):
+        auto._root_namespace(_FakeAssembly("Other", ["Alpha.X", "Alpha.Y", "Beta"]))
 
 
 def test_load_does_not_change_regular_imports(ns):
@@ -236,6 +259,19 @@ def test_enum_defaults_are_shown_by_name(ns):
 @pytest.mark.parametrize("value", ["Illiquid", "illiquid", "Liquidity.Illiquid", 1])
 def test_enum_parameters_accept_names_and_values(ns, value):
     assert ns.Position("x", datetime(2026, 1, 1), value).Liquidity == Liquidity.Illiquid
+
+
+def test_parameters_named_like_python_keywords(ns):
+    # pythonnet crashes the process if asked for the signature of Add(DateTime from, double level).
+    pricer = ns.StepPricer()
+    pricer.Add(datetime(2026, 1, 1), 1.0)
+    pricer.Add(from_=datetime(2026, 6, 1), level=3.0)
+
+    assert str(inspect.signature(ns.StepPricer.Add)) == "(self, from_: datetime, level: float) -> None"
+    assert pricer.Price(datetime(2026, 7, 1)) == 3.0
+    raw = pandasnet.wrap_class(pandasnet.unwrap(pricer))
+    raw.Add(datetime(2027, 1, 1), 5.0)
+    assert raw.Price(datetime(2027, 2, 1)) == 5.0
 
 
 @pytest.mark.parametrize(

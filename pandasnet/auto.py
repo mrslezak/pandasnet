@@ -9,6 +9,7 @@ import importlib.abc
 import importlib.util
 import inspect
 import os
+import re
 import sys
 import types
 from datetime import datetime, timedelta
@@ -99,9 +100,10 @@ def _assign(target, clr_type, name, value):
 class _AutoMethod:
     """CLR method whose arguments are adapted and whose results are converted and proxied; ``[T]`` binds generics."""
 
-    def __init__(self, method):
+    def __init__(self, method, declaring_type=None):
         self._method = method
-        self._call = wrap(method)
+        self._declaring_type = declaring_type
+        self._call = wrap(method, declaring_type=declaring_type)
         self.__name__ = self._call.__name__
         self.__doc__ = self._call.__doc__
 
@@ -109,10 +111,10 @@ class _AutoMethod:
         return _auto(self._call(*args, **kwargs))
 
     def __getitem__(self, key):
-        return _AutoMethod(self._method[unwrap(key)])
+        return _AutoMethod(self._method[unwrap(key)], self._declaring_type)
 
     def __getattr__(self, name):
-        if name in ("_method", "_call"):
+        if name in ("_method", "_call", "_declaring_type"):
             raise AttributeError(name)
         return getattr(self._method, name)
 
@@ -150,7 +152,7 @@ class _AutoType(type):
         if isinstance(member, type):
             return _auto(member)
         if callable(member):
-            return _AutoMethod(member)
+            return _AutoMethod(member, cls.__clr_type__)
         return _auto(_value_from_clr(member))
 
     def __setattr__(cls, name, value):
@@ -186,6 +188,34 @@ class _AutoObject(_ClrProxy):
     def __init__(self, *args, **kwargs):
         pass
 
+    @classmethod
+    def input_schema(cls) -> pd.DataFrame:
+        """Constructor arguments: one row each with its Python type, whether it is required, and its default."""
+        from .frames import input_schema
+
+        return input_schema(cls)
+
+    @classmethod
+    def template_frame(cls, rows: int = 0, overload: int | None = None) -> pd.DataFrame:
+        """Typed DataFrame with one column per constructor argument (defaults pre-filled) to fill and pass to from_frame."""
+        from .frames import template_frame
+
+        return template_frame(cls, rows, overload)
+
+    @classmethod
+    def from_frame(cls, frame: pd.DataFrame, overload: int | None = None) -> list:
+        """One object per row, matching columns to constructor arguments; all rows are validated first."""
+        from .frames import from_frame
+
+        return from_frame(cls, frame, overload)
+
+    @classmethod
+    def ask(cls, overload: int | None = None):
+        """Create one object by answering a prompt per constructor argument (type, hint and default shown)."""
+        from .interactive import _caller_namespace, ask
+
+        return ask(cls, overload=overload, namespace=_caller_namespace(1))
+
     def __getattr__(self, name):
         if name in _ClrProxy.__slots__:
             raise AttributeError(name)
@@ -196,7 +226,7 @@ class _AutoObject(_ClrProxy):
             return _auto(_value_from_clr(member))
         methods = self._methods
         if name not in methods:
-            methods[name] = _AutoMethod(member)
+            methods[name] = _AutoMethod(member, self.__clr_type__)
         return methods[name]
 
     def __setattr__(self, name, value):
@@ -275,7 +305,7 @@ class _LazyMember:
         member = getattr(owner.__clr_class__ if instance is None else instance._target, self._name)
         if isinstance(member, type):
             return _auto(member)
-        return _AutoMethod(member) if callable(member) else _auto(_value_from_clr(member))
+        return _AutoMethod(member, owner.__clr_type__) if callable(member) else _auto(_value_from_clr(member))
 
 
 def _python_class(clr_type):
@@ -344,7 +374,7 @@ def _call(instance, name, args, kwargs):
     methods = instance._methods
     method = methods.get(name)
     if method is None:
-        method = methods[name] = wrap(getattr(instance._target, name))
+        method = methods[name] = wrap(getattr(instance._target, name), declaring_type=instance.__clr_type__)
     return _auto(method(*args, **kwargs))
 
 
@@ -352,7 +382,7 @@ def _call_static(facade, name, args, kwargs):
     calls = facade.__dict__["_static_calls"]
     method = calls.get(name)
     if method is None:
-        method = calls[name] = wrap(getattr(facade.__clr_class__, name))
+        method = calls[name] = wrap(getattr(facade.__clr_class__, name), declaring_type=facade.__clr_type__)
     return _auto(method(*args, **kwargs))
 
 
@@ -375,6 +405,7 @@ def _method(facade, name, static, overloads):
     function.__doc__ = _overloads_doc(name, overloads)
     annotation = _annotation(primary.return_type, str(function.__signature__.return_annotation))
     function.__annotations__ = {} if annotation is None else {"return": annotation}
+    function.__clr_owner__, function.__clr_name__ = facade, name
     return staticmethod(function) if static else function
 
 
@@ -552,6 +583,8 @@ def _namespace_for(module):
     # pythonnet's __all__ lists the namespace's public types (sub-namespaces are listed separately).
     classes = {}
     for name in getattr(module, "__all__", ()):
+        if "`" in name:
+            continue  # .NET's generic arity name (Box`1); pythonnet also lists Box, used as Box[T]
         try:
             classes[name] = getattr(module, name)
         except AttributeError:
@@ -578,11 +611,25 @@ def _reference(assembly, namespace):
     _DOMAIN_TYPES.update((clr_type.FullName, clr_type) for clr_type in loaded.GetExportedTypes())
     if namespace is not None:
         return loaded, namespace
-    paths = [name.split(".") for name in {clr_type.Namespace for clr_type in loaded.GetExportedTypes()} if name]
-    common = os.path.commonprefix(paths) if paths else []
-    if not common:
-        raise ValueError(f"{loaded.GetName().Name} has no common root namespace; pass namespace=...")
-    return loaded, ".".join(common)
+    return loaded, _root_namespace(loaded)
+
+
+def _root_namespace(loaded) -> str:
+    """The assembly's own root namespace: the common root of its types, else the one named after the assembly."""
+    names = {clr_type.Namespace for clr_type in loaded.GetExportedTypes() if clr_type.Namespace}
+    common = os.path.commonprefix([name.split(".") for name in names]) if names else []
+    if common:
+        return ".".join(common)
+    roots = {}
+    for name in names:
+        root = name.split(".")[0]
+        roots[root] = roots.get(root, 0) + 1
+    # Visual Studio's default root namespace is the assembly name with invalid characters as "_".
+    default = re.sub(r"[^0-9A-Za-z_.]", "_", loaded.GetName().Name)
+    if default in roots:
+        return default
+    choices = ", ".join(f"{root!r} ({count} namespaces)" for root, count in sorted(roots.items(), key=lambda item: -item[1]))
+    raise ValueError(f"{loaded.GetName().Name} has several root namespaces; pass namespace= one of: {choices}")
 
 
 def _namespace(name):

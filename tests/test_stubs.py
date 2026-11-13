@@ -60,6 +60,16 @@ def test_stub_properties_document_how_to_set_them(stubs):
     assert 'def Weights(self) -> ndarray:\n        """settable"""' in root
 
 
+def test_stubs_declare_frame_helpers(stubs):
+    _, files = stubs
+    root = files[os.path.join("LibForTests-stubs", "__init__.pyi")]
+
+    assert "def template_frame(cls, rows: int = 0, overload: int | None = None) -> DataFrame: ..." in root
+    assert "def from_frame(cls, frame: DataFrame, overload: int | None = None) -> list[Trade]: ..." in root
+    assert "def input_schema(cls) -> DataFrame: ..." in root
+    assert "def ask(cls, overload: int | None = None) -> Trade: ..." in root
+
+
 def test_regenerating_replaces_previous_stubs(tmp_path):
     stale = tmp_path / "LibForTests-stubs" / "Old"
     pandasnet.generate_stubs(LIBRARY, output=tmp_path)

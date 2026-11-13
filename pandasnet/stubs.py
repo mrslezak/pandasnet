@@ -125,6 +125,18 @@ class _Writer:
         constructors = clrinfo.constructors(clr_type)
         if constructors:
             self.overloads(indent + 1, "__init__", constructors, False, None)
+            frame = self.names["DataFrame"]
+            self.emit(indent + 1, "@classmethod")
+            self.emit(indent + 1, f"def input_schema(cls) -> {frame}: ...")
+            self.emit(indent + 1, "@classmethod")
+            self.emit(indent + 1, f"def template_frame(cls, rows: int = 0, overload: int | None = None) -> {frame}: ...")
+            self.emit(indent + 1, "@classmethod")
+            self.emit(
+                indent + 1,
+                f"def from_frame(cls, frame: {frame}, overload: int | None = None) -> list[{_qualname(clr_type)}]: ...",
+            )
+            self.emit(indent + 1, "@classmethod")
+            self.emit(indent + 1, f"def ask(cls, overload: int | None = None) -> {_qualname(clr_type)}: ...")
         parameters = {_keyword(p.name): p.name for overload in constructors for p in overload.parameters}
         element = clrinfo.element_type(clr_type)
         if element is not None:

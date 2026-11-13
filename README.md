@@ -140,6 +140,43 @@ pandasnet.generate_stubs(r"C:\libs\MyLib.dll")
 
 The stubs describe the same Python-facing types, so `from MyLib import Engine` or `import MyLib` (with `pandasnet.add_reference` at runtime) gets completion, signatures and type checking in the editor. Editors cannot infer what `MyLib = pandasnet.load(...)` returns, so prefer the import style in code you edit.
 
+#### Objects from and to DataFrames
+
+Every class with a public constructor can describe its inputs as a table and build objects from rows:
+
+```python
+MyLib.Item.input_schema()               # one row per constructor argument: type, required, default
+frame = MyLib.Item.template_frame(rows=2)   # typed columns; optional arguments pre-filled with defaults
+frame["id"] = ["A", "B"]
+frame["value"] = [100.0, 95.0]
+items = MyLib.Item.from_frame(frame)    # one object per row
+pandasnet.to_frame(items)               # back to a DataFrame: one column per readable property
+```
+
+`template_frame` gives date columns as `datetime64`, numbers as `float64`/`Int64`, text as `string`, and enums as categoricals restricted to the member names. It can be exported with `to_csv`/`to_excel` to fill in a spreadsheet. `from_frame` matches columns to constructor arguments ignoring case and underscores, picks the constructor that fits the columns (or `overload=`), leaves missing optional cells at their defaults, parses date text, and validates every row before creating anything, reporting each problem by row and column.
+
+#### Building a call interactively
+
+When you are not sure what to pass, let pandasnet ask for each argument:
+
+```python
+item = MyLib.Item.ask()                 # or pandasnet.ask(MyLib.Item)
+result = pandasnet.ask(engine.Run)      # methods too
+```
+
+```
+Item (* = required, Enter = keep default):
+  id* (str) text: A
+  value* (float) number, e.g. 0.25: abc
+    ! 'abc' is not a number; enter e.g. 0.25
+  value* (float) number, e.g. 0.25: 100
+
+Equivalent code:
+    Item(id='A', value=100.0)
+```
+
+Each prompt shows the argument's Python type and an example; Enter keeps an optional argument's default; enum members are offered as a numbered list; dates, lists (`2026-01-05, 2026-01-12`) and matrices (`1, 0.75; 0.75, 1`) can be typed directly. Arguments that are objects can be given as the name of an existing variable or created on the spot (for interfaces, pandasnet lists the implementing classes to choose from). Invalid answers are explained and asked again, and the equivalent Python code is printed at the end so the call can be reused.
+
 The following tables summarize the registered Python.NET codec mappings. They are not an exhaustive list of `wrap` conversions: the target-aware wrapper also handles Python containers, compatible CLR collection interfaces, and overload-specific scalar conversions as described above.
 
 ### Python -> .Net (registered codecs)

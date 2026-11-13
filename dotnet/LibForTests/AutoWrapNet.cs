@@ -52,6 +52,26 @@ namespace LibForTests
         double Price(DateTime date);
     }
 
+    // Constructor with optional arguments, for DataFrame templates and from_frame.
+    public class Trade
+    {
+        public Trade(string id, DateTime tradeDate, double quantity, Liquidity liquidity = Liquidity.Liquid, int lots = 1)
+        {
+            Id = id;
+            TradeDate = tradeDate;
+            Quantity = quantity;
+            Liquidity = liquidity;
+            Lots = lots;
+        }
+
+        public string Id { get; }
+        public DateTime TradeDate { get; }
+        public double Quantity { get; }
+        public Liquidity Liquidity { get; }
+        public int Lots { get; }
+        public double Notional => Quantity * Lots;
+    }
+
     public class FlatPricer : IPricer
     {
         private readonly double _level;
@@ -76,6 +96,16 @@ namespace LibForTests
         }
 
         public double Price(DateTime date) => _inner.Price(date) + _shift;
+    }
+
+    // Created without arguments and configured through Add(...).
+    public class StepPricer : IPricer
+    {
+        private readonly SortedDictionary<DateTime, double> _steps = new SortedDictionary<DateTime, double>();
+
+        public void Add(DateTime from, double level) => _steps[from] = level;
+
+        public double Price(DateTime date) => _steps.Where(p => p.Key <= date).Select(p => p.Value).LastOrDefault();
     }
 }
 
