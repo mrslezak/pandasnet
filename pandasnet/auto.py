@@ -99,9 +99,10 @@ def _assign(target, clr_type, name, value):
 class _AutoMethod:
     """CLR method whose arguments are adapted and whose results are converted and proxied; ``[T]`` binds generics."""
 
-    def __init__(self, method):
+    def __init__(self, method, declaring_type=None):
         self._method = method
-        self._call = wrap(method)
+        self._declaring_type = declaring_type
+        self._call = wrap(method, declaring_type=declaring_type)
         self.__name__ = self._call.__name__
         self.__doc__ = self._call.__doc__
 
@@ -109,10 +110,10 @@ class _AutoMethod:
         return _auto(self._call(*args, **kwargs))
 
     def __getitem__(self, key):
-        return _AutoMethod(self._method[unwrap(key)])
+        return _AutoMethod(self._method[unwrap(key)], self._declaring_type)
 
     def __getattr__(self, name):
-        if name in ("_method", "_call"):
+        if name in ("_method", "_call", "_declaring_type"):
             raise AttributeError(name)
         return getattr(self._method, name)
 
@@ -150,7 +151,7 @@ class _AutoType(type):
         if isinstance(member, type):
             return _auto(member)
         if callable(member):
-            return _AutoMethod(member)
+            return _AutoMethod(member, cls.__clr_type__)
         return _auto(_value_from_clr(member))
 
     def __setattr__(cls, name, value):
@@ -196,7 +197,7 @@ class _AutoObject(_ClrProxy):
             return _auto(_value_from_clr(member))
         methods = self._methods
         if name not in methods:
-            methods[name] = _AutoMethod(member)
+            methods[name] = _AutoMethod(member, self.__clr_type__)
         return methods[name]
 
     def __setattr__(self, name, value):
@@ -275,7 +276,7 @@ class _LazyMember:
         member = getattr(owner.__clr_class__ if instance is None else instance._target, self._name)
         if isinstance(member, type):
             return _auto(member)
-        return _AutoMethod(member) if callable(member) else _auto(_value_from_clr(member))
+        return _AutoMethod(member, owner.__clr_type__) if callable(member) else _auto(_value_from_clr(member))
 
 
 def _python_class(clr_type):
@@ -344,7 +345,7 @@ def _call(instance, name, args, kwargs):
     methods = instance._methods
     method = methods.get(name)
     if method is None:
-        method = methods[name] = wrap(getattr(instance._target, name))
+        method = methods[name] = wrap(getattr(instance._target, name), declaring_type=instance.__clr_type__)
     return _auto(method(*args, **kwargs))
 
 
@@ -352,7 +353,7 @@ def _call_static(facade, name, args, kwargs):
     calls = facade.__dict__["_static_calls"]
     method = calls.get(name)
     if method is None:
-        method = calls[name] = wrap(getattr(facade.__clr_class__, name))
+        method = calls[name] = wrap(getattr(facade.__clr_class__, name), declaring_type=facade.__clr_type__)
     return _auto(method(*args, **kwargs))
 
 

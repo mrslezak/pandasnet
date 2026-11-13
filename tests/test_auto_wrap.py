@@ -238,6 +238,19 @@ def test_enum_parameters_accept_names_and_values(ns, value):
     assert ns.Position("x", datetime(2026, 1, 1), value).Liquidity == Liquidity.Illiquid
 
 
+def test_parameters_named_like_python_keywords(ns):
+    # pythonnet crashes the process if asked for the signature of Add(DateTime from, double level).
+    pricer = ns.StepPricer()
+    pricer.Add(datetime(2026, 1, 1), 1.0)
+    pricer.Add(from_=datetime(2026, 6, 1), level=3.0)
+
+    assert str(inspect.signature(ns.StepPricer.Add)) == "(self, from_: datetime, level: float) -> None"
+    assert pricer.Price(datetime(2026, 7, 1)) == 3.0
+    raw = pandasnet.wrap_class(pandasnet.unwrap(pricer))
+    raw.Add(datetime(2027, 1, 1), 5.0)
+    assert raw.Price(datetime(2027, 2, 1)) == 5.0
+
+
 @pytest.mark.parametrize(
     "call, message",
     [

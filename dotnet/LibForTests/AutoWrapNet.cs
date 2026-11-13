@@ -77,6 +77,16 @@ namespace LibForTests
 
         public double Price(DateTime date) => _inner.Price(date) + _shift;
     }
+
+    // Parameter named like a Python keyword ("from").
+    public class StepPricer : IPricer
+    {
+        private readonly SortedDictionary<DateTime, double> _steps = new SortedDictionary<DateTime, double>();
+
+        public void Add(DateTime from, double level) => _steps[from] = level;
+
+        public double Price(DateTime date) => _steps.Where(p => p.Key <= date).Select(p => p.Value).LastOrDefault();
+    }
 }
 
 namespace LibForTests.Auto

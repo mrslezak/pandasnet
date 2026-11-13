@@ -41,6 +41,7 @@ from System import (
 )
 from System.Collections.Generic import Dictionary, List
 from System.Linq import Enumerable
+from System.Reflection import BindingFlags
 from System.Runtime.InteropServices import GCHandle, GCHandleType, Marshal
 
 
@@ -609,6 +610,39 @@ def _constructor_overloads(cls):
     return overloads
 
 
+def _reflected_overloads(method, clr_type, name):
+    """Describe a method's overloads from .NET reflection on its declaring type; None if any is undescribable."""
+    # pythonnet crashes the process when asked for the signature of a method whose parameter is a
+    # Python keyword (e.g. "from"), so parameter names come from reflection instead.
+    flags = BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy
+    overloads, seen = [], set()
+    for info in clr_type.GetMethods(flags):
+        if info.Name != name:
+            continue
+        if info.IsGenericMethodDefinition:
+            return None
+        parameters = info.GetParameters()
+        signature = str(info)
+        if not parameters.Length or signature in seen:
+            continue
+        types = tuple(parameter.ParameterType for parameter in parameters)
+        if any(clr_type_.IsByRef or clr_type_.IsPointer for clr_type_ in types):
+            return None
+        try:
+            selected = method.__overloads__[types]
+        except (TypeError, KeyError, ValueError):
+            continue
+        seen.add(signature)
+        overloads.append(
+            _Overload(
+                signature,
+                tuple(_Parameter(p.Name, p.ParameterType, p.IsOptional) for p in parameters),
+                selected,
+            )
+        )
+    return overloads
+
+
 def _method_overloads(method):
     """Describe each overload listed in a pythonnet method's docstring; None if any is undescribable."""
     overloads = []
@@ -877,7 +911,7 @@ def _materialize(value):
     return list(value) if isinstance(value, Iterator) and not isinstance(value, Object) else value
 
 
-def wrap(method: Callable) -> Callable:
+def wrap(method: Callable, *, declaring_type=None) -> Callable:
     """Wrap a CLR method or constructor so Python values are adapted to its CLR signature.
 
     Each argument is converted for the parameter type of the best-matching
@@ -893,6 +927,9 @@ def wrap(method: Callable) -> Callable:
     and framework collections become NumPy arrays, other collections become
     lists/dicts/tuples, and domain objects stay CLR objects. Constructors and
     plain Python callables return their result unchanged.
+
+    ``declaring_type`` (the CLR ``System.Type`` the method belongs to) lets overloads be described
+    through reflection, which also works for parameters named like Python keywords.
     """
 
     if isinstance(method, _ClrProxy):
@@ -902,7 +939,12 @@ def wrap(method: Callable) -> Callable:
     if isinstance(method, type) and issubclass(method, Object):
         discover, convert_result = _constructor_overloads, False
     elif hasattr(method, "__overloads__"):
-        discover, convert_result = _method_overloads, True
+        convert_result = True
+        if declaring_type is None:
+            discover = _method_overloads
+        else:
+            member_name = method.__name__
+            discover = lambda bound: _reflected_overloads(bound, declaring_type, member_name)  # noqa: E731
     else:
         discover, convert_result = None, False
     name = getattr(method, "__name__", "wrapped_clr_method")
@@ -940,6 +982,11 @@ def wrap(method: Callable) -> Callable:
     return invoke
 
 
+def _declaring_type(target):
+    """CLR type whose members pythonnet exposes on target (a class, or an object's declared type)."""
+    return clr.GetClrType(target if isinstance(target, type) else type(target))
+
+
 class _ClrProxy:
     """Proxy a CLR type or instance and adapt its callable members on access."""
 
@@ -956,7 +1003,7 @@ class _ClrProxy:
 
         methods = self._methods
         if name not in methods:
-            methods[name] = wrap(member)
+            methods[name] = wrap(member, declaring_type=_declaring_type(self._target))
         return methods[name]
 
     def __setattr__(self, name, value):
