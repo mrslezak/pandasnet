@@ -31,6 +31,10 @@ namespace LibForTests
 
         public string MaturityKind() => Maturity.Kind.ToString();
 
+        public double Value(IPricer pricer) => pricer.Price(Maturity);
+
+        public string Describe(Liquidity liquidity = Liquidity.Illiquid) => liquidity.ToString();
+
         public class Leg
         {
             public Leg(double notional)
@@ -40,6 +44,38 @@ namespace LibForTests
 
             public double Notional { get; }
         }
+    }
+
+    // Interface parameters: callers must pick one of the implementations.
+    public interface IPricer
+    {
+        double Price(DateTime date);
+    }
+
+    public class FlatPricer : IPricer
+    {
+        private readonly double _level;
+
+        public FlatPricer(double level)
+        {
+            _level = level;
+        }
+
+        public double Price(DateTime date) => _level;
+    }
+
+    public class ShiftedPricer : IPricer
+    {
+        private readonly IPricer _inner;
+        private readonly double _shift;
+
+        public ShiftedPricer(IPricer inner, double shift)
+        {
+            _inner = inner;
+            _shift = shift;
+        }
+
+        public double Price(DateTime date) => _inner.Price(date) + _shift;
     }
 }
 

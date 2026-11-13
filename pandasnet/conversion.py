@@ -21,6 +21,7 @@ from System import (
     DateTimeKind,
     Delegate,
     Double,
+    Enum,
     Int16,
     Int32,
     Int64,
@@ -470,6 +471,18 @@ def _as_sequence(value):
     return None
 
 
+def _enum_plan(value, target):
+    """Enum members by name (case-insensitive, e.g. "Liquid") or defined integer value."""
+    if isinstance(value, str):
+        names = {str(name).lower(): str(name) for name in Enum.GetNames(target)}
+        name = names.get(value.split(".")[-1].lower())
+        return None if name is None else _Plan(1, True, lambda: Enum.Parse(target, name))
+    if isinstance(value, (int, np.integer)) and not isinstance(value, (bool, np.bool_)):
+        member = Enum.ToObject(target, int(value))
+        return _Plan(2, True, lambda: member) if Enum.IsDefined(target, member) else None
+    return None
+
+
 def _plan(value, target):
     """Plan how to pass a Python value to a CLR parameter type; None if it certainly cannot be."""
     if isinstance(value, _ClrProxy):
@@ -481,6 +494,8 @@ def _plan(value, target):
         return _plan(value, underlying)
     if isinstance(value, Object):
         return _clr_instance_plan(value, target)
+    if target.IsEnum:
+        return _enum_plan(value, target)
     sequence = _as_sequence(value)
     if sequence is not None:
         collection = _collection_target(target)
@@ -634,16 +649,22 @@ class _Match(NamedTuple):
     certain: bool
 
 
+def _keyword(name: str) -> str:
+    # startDate, start_date and from_ (keyword-escaped) all match the CLR parameter name.
+    return name.replace("_", "").lower()
+
+
 def _bind(overload: _Overload, args: tuple, kwargs: dict):
     parameters = overload.parameters
     if len(args) > len(parameters):
         return None
-    remaining = {parameter.name: parameter for parameter in parameters[len(args) :]}
-    if any(name not in remaining for name in kwargs):
+    remaining = {_keyword(parameter.name): parameter for parameter in parameters[len(args) :]}
+    keywords = {_keyword(name): value for name, value in kwargs.items()}
+    if len(keywords) != len(kwargs) or any(name not in remaining for name in keywords):
         return None
-    if any(not parameter.optional and name not in kwargs for name, parameter in remaining.items()):
+    if any(not parameter.optional and name not in keywords for name, parameter in remaining.items()):
         return None
-    used = [*zip(args, parameters), *((value, remaining[name]) for name, value in kwargs.items())]
+    used = [*zip(args, parameters), *((value, remaining[name]) for name, value in keywords.items())]
     plans = [_plan(value, parameter.clr_type) for value, parameter in used]
     if any(plan is None for plan in plans):
         return None
@@ -669,6 +690,96 @@ def _more_specific(match: _Match, other: _Match) -> bool:
     return all(_converts_to(mine, theirs) for mine, theirs in pairs) and not all(
         _converts_to(theirs, mine) for mine, theirs in pairs
     )
+
+
+# --- Explaining calls that no overload accepts -------------------------------------------------
+
+
+def _short_name(clr_type) -> str:
+    return clr_type.Name.split("`")[0]
+
+
+def _describe(value) -> str:
+    text = repr(value)
+    return f"{type(value).__name__} {text if len(text) <= 40 else text[:37] + '...'}"
+
+
+def _expectation(target) -> str:
+    """What a parameter of this CLR type accepts, with a hint on how to build such a value."""
+    from . import clrinfo
+
+    text = f"expected {clrinfo.param_hint(target, _short_name)}"
+    underlying = Nullable.GetUnderlyingType(target) or target
+    namespace = underlying.Namespace or ""
+    if underlying.IsEnum:
+        names = ", ".join(repr(str(name)) for name in Enum.GetNames(underlying))
+        text += f"; use {_short_name(underlying)}.<member> or one of {names}"
+    elif underlying.IsInterface or (underlying.IsAbstract and not underlying.IsSealed):
+        implementations = clrinfo.implementations(underlying, underlying.Assembly.GetExportedTypes())
+        if implementations:
+            text += f"; pass one of: {', '.join(_short_name(t) for t in implementations)}"
+    elif not underlying.IsPrimitive and not namespace.startswith("System") and underlying.GetConstructors():
+        constructor = max(clrinfo.constructors(underlying), key=lambda overload: len(overload.parameters))
+        parameters = ", ".join(f"{p.name}: {clrinfo.param_hint(p.clr_type, _short_name)}" for p in constructor.parameters)
+        text += f"; create one with {_short_name(underlying)}({parameters})"
+    return text
+
+
+def _explain(value, target, depth=0):
+    """Why value does not fit target, or None when it certainly does."""
+    if isinstance(value, _ClrProxy):
+        value = value._target
+    plan = _plan(value, target)
+    if plan is not None and plan.certain:
+        return None
+    if value is None:
+        return f"got None; {_short_name(target)} cannot be None"
+    collection = _collection_target(target)
+    sequence = None if isinstance(value, Object) else _as_sequence(value)
+    if plan is None and sequence is not None and collection is not None and depth < 3:
+        for index, item in enumerate(sequence):
+            reason = _explain(item, collection[0], depth + 1)
+            if reason is not None:
+                return f"element {index}: {reason}"
+    return f"got {_describe(value)}; {_expectation(target)}"
+
+
+def _mismatch(overload: _Overload, args: tuple, kwargs: dict):
+    parameters = overload.parameters
+    if len(args) > len(parameters):
+        return f"takes at most {len(parameters)} arguments, got {len(args)}"
+    remaining = {_keyword(parameter.name): parameter for parameter in parameters[len(args) :]}
+    keywords = {_keyword(name): (name, value) for name, value in kwargs.items()}
+    for key, (name, _) in keywords.items():
+        if key not in remaining:
+            return f"unknown argument {name!r}"
+    for key, parameter in remaining.items():
+        if not parameter.optional and key not in keywords:
+            return f"missing argument {parameter.name!r}"
+    used = [*zip(args, parameters), *((value, remaining[key]) for key, (_, value) in keywords.items())]
+    for value, parameter in used:
+        reason = _explain(value, parameter.clr_type)
+        if reason is not None:
+            return f"argument {parameter.name!r}: {reason}"
+    return None
+
+
+def _explain_call(name: str, overloads: list, args: tuple, kwargs: dict):
+    """Per-overload reasons the arguments do not fit, or None if some overload looks applicable."""
+    from . import clrinfo
+
+    lines = []
+    for overload in overloads:
+        reason = _mismatch(overload, args, kwargs)
+        if reason is None:
+            return None
+        parameters = ", ".join(
+            f"{parameter.name}: {clrinfo.param_hint(parameter.clr_type, _short_name)}" + (" = ..." if parameter.optional else "")
+            for parameter in overload.parameters
+        )
+        lines.append(f"  {name}({parameters})\n    {reason}")
+    count = "the overload" if len(overloads) == 1 else f"any of the {len(overloads)} overloads"
+    return f"The arguments do not fit {count} of {name}:\n" + "\n".join(lines)
 
 
 def _resolve(name: str, overloads: list, args: tuple, kwargs: dict):
@@ -786,6 +897,8 @@ def wrap(method: Callable) -> Callable:
 
     if isinstance(method, _ClrProxy):
         method = method._target
+    elif isinstance(method, type):
+        method = getattr(method, "__clr_class__", method)
     if isinstance(method, type) and issubclass(method, Object):
         discover, convert_result = _constructor_overloads, False
     elif hasattr(method, "__overloads__"):
@@ -809,10 +922,17 @@ def wrap(method: Callable) -> Callable:
         if match is None:
             converted_args = tuple(_value_to_clr(value) for value in args)
             converted_kwargs = {key: _value_to_clr(value) for key, value in kwargs.items()}
-            result = method(*converted_args, **converted_kwargs)
+            try:
+                result = method(*converted_args, **converted_kwargs)
+            except Exception as error:
+                explanation = _explain_call(name, overloads, args, kwargs) if isinstance(overloads, list) and overloads else None
+                if explanation is None:
+                    raise
+                raise TypeError(explanation) from error
         else:
             converted = [plan.convert() for plan in match.plans]
-            result = match.overload.invoke(*converted[: len(args)], **dict(zip(kwargs, converted[len(args) :])))
+            keywords = {parameter.name: value for parameter, value in zip(match.parameters[len(args) :], converted[len(args) :])}
+            result = match.overload.invoke(*converted[: len(args)], **keywords)
         return _value_from_clr(result) if convert_result else result
 
     invoke.__name__ = name

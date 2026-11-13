@@ -1,5 +1,8 @@
 import os
 
+# Tests pass stubs= explicitly; never write stub packages into the real site-packages.
+os.environ["PANDASNET_STUBS"] = "0"
+
 import pandasnet
 import clr
 

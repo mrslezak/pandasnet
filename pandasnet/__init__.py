@@ -33,6 +33,7 @@ Codecs.Initialize(False)
 
 from .conversion import wrap, wrap_class
 from .auto import add_reference, load, unwrap
+from .stubs import generate_stubs
 
 
 def set_local_datetime_policy(policy: str) -> None:

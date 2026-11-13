@@ -119,7 +119,26 @@ from MyLib import Engine, Item, Settings
 result = Engine().Run([Item("A", 100.0)], np.eye(1), Settings(datetime(2026, 1, 1), dates, 1000))
 ```
 
-Every constructor, method (static, instance and generic via `Method[T]`), property getter/setter, indexer and iterator then applies the `wrap` conversions above. CLR objects are returned as proxies (also inside returned lists, tuples and dicts) that can be passed straight back to .NET; enums are returned unwrapped. `isinstance(obj, MyLib.Item)` works with the proxied type, and `pandasnet.unwrap(obj)` returns the raw CLR object. The namespace defaults to the common root namespace of the assembly's exported types; pass `namespace=` to choose another. `add_reference` affects only the registered namespace and its sub-namespaces.
+Every constructor, method (static, instance and generic via `Method[T]`), property getter/setter, indexer and iterator then applies the `wrap` conversions above. Keyword arguments match .NET parameter names ignoring case and underscores (`start_date=` or `startDate=`). CLR objects are returned as instances of these classes (also inside returned lists, tuples and dicts) that can be passed straight back to .NET; enums are returned unwrapped. `isinstance(obj, MyLib.Item)` works, and `pandasnet.unwrap(obj)` returns the raw CLR object. The namespace defaults to the common root namespace of the assembly's exported types; pass `namespace=` to choose another. `add_reference` affects only the registered namespace and its sub-namespaces.
+
+#### Discovering the API
+
+Each .NET type is mirrored by a generated Python class whose constructors, methods and properties are real attributes with Python-facing signatures, so console/Jupyter completion, `help()` and `inspect.signature` work through whole call chains:
+
+```python
+>>> MyLib.Engine.Run
+Run(items: Iterable[Item], matrix: ndarray, settings: Settings) -> ResultSet
+    .NET: MyLib.ResultSet Run(System.Collections.Generic.IReadOnlyList`1[MyLib.Item], Double[,], MyLib.Settings)
+>>> MyLib.Engine().Run(items, np.eye(2), settings).    # completion lists ResultSet's members
+```
+
+Editors that analyse files without running them (VS Code/Pylance, the Spyder editor) use stub files. `pandasnet.load` and `pandasnet.add_reference` keep them current automatically: they write a `MyLib-stubs` package into the active environment's site-packages whenever the assembly build (or pandasnet's stub generator) changed, and do nothing otherwise. Writes are atomic, and a failure (for example a read-only environment) only issues a warning. Pass `stubs=False` or set `PANDASNET_STUBS=0` to turn this off, or `stubs="some/folder"` to write elsewhere. To (re)generate them explicitly:
+
+```python
+pandasnet.generate_stubs(r"C:\libs\MyLib.dll")
+```
+
+The stubs describe the same Python-facing types, so `from MyLib import Engine` or `import MyLib` (with `pandasnet.add_reference` at runtime) gets completion, signatures and type checking in the editor. Editors cannot infer what `MyLib = pandasnet.load(...)` returns, so prefer the import style in code you edit.
 
 The following tables summarize the registered Python.NET codec mappings. They are not an exhaustive list of `wrap` conversions: the target-aware wrapper also handles Python containers, compatible CLR collection interfaces, and overload-specific scalar conversions as described above.
 
